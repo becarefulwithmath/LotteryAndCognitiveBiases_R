@@ -1,0 +1,118 @@
+fname <- "Final list - ENG pages and books, PL books_v2.2.xlsx"
+#data_cat <- "data"
+data_cat <- "E:/Dropbox/articles/systems"
+fpath <- paste(data_cat, fname, sep = "/")
+#install.packages("readxl")
+library("readxl")
+#install.packages("data.table")
+library("data.table")
+
+books_dt <- data.table(read_excel(fpath, sheet = "Books", skip = 1))
+sites_dt <- data.table(read_excel(fpath, sheet = "Webpages ENG (analysed)", skip = 3))
+
+books_dt[ ,id := paste0("b", book_id)]
+books_dt[ ,is_book := 1]
+books_price_columns <- c("price_ebook", "price_paperback_new", "price_paperback_used")
+books_dt[ , (books_price_columns) := lapply(.SD, function(x) ifelse(is.na(x), Inf, x)), 
+    .SDcols = books_price_columns]
+books_dt[ ,price := pmin(price_ebook, price_paperback_new, price_paperback_used)]
+
+
+sites_dt[ ,id := paste0("s", count_id)]
+sites_dt[ ,is_book := NA]
+sites_dt[ ,price := systm_price_min]
+
+chosen_columns <- intersect(names(books_dt), names(sites_dt))
+dt <- rbind(books_dt[ ,chosen_columns, with = FALSE], sites_dt[ ,chosen_columns, with = FALSE])
+
+dt[ ,graphs_tables := !(is.na(is_there_graph) & is.na(is_there_table))]
+dt[ ,graphs_tables := ifelse(!graphs_tables, NA, 1)]
+
+
+non_clustering_columns <- c("systm_title",                       
+                        "systm_authr",                       
+                        "systm_year",                       
+                        "systm_lang",                       
+                        "systm_is_it_webpage",               
+                        "systm_is_it_book",                 
+                        "systm_availability_of_information",
+                        "other",                            
+                        "for_the_website",                 
+                        "for_the_paper",
+                        "misleading_score_max4",
+                        "id",
+                        "system_id",
+                        "is_there_graph", "is_there_table",
+                        "cluster" #to be sure
+                        )
+
+clustering_non_binary_columns <- c("design_score_max4", "price")
+
+clustering_binary_columns <- setdiff(names(dt), c(non_clustering_columns, clustering_non_binary_columns))
+dt[ , (clustering_binary_columns) := lapply(.SD, function(x) ifelse(is.na(x), 0, 1)), 
+    .SDcols = clustering_binary_columns]
+clustering_columns <- c(clustering_binary_columns, clustering_non_binary_columns)
+
+
+
+data <- dt[ ,clustering_columns, with = FALSE]
+
+#data[, (clustering_columns) := lapply(.SD, function(x) (x-min(x)) / (max(x)-min(x))),.SDcols=clustering_columns]
+
+#library("scales")
+data[, (clustering_columns) := lapply(.SD, scale), .SDcols=clustering_columns]
+
+#Elbow Method
+#The elbow method looks at the percentage of variance explained as a function of the number of clusters: One should choose a number of clusters so that adding another cluster doesnвЂ™t give much better modeling of the data. More precisely, if one plots the percentage of variance explained by the clusters against the number of clusters, the first clusters will add much information (explain a lot of variance), but at some point the marginal gain will drop, giving an angle in the graph. The number of clusters is chosen at this point, hence the вЂњelbow criterionвЂќ. This вЂњelbowвЂќ cannot always be unambiguously identified.
+
+#Elbow Method for finding the optimal number of clusters
+set.seed(123)
+# Compute and plot wss for k = 2 to k = 15.
+k.max <- 15
+
+wss <- sapply(1:k.max, 
+              function(k){
+                print(k)
+                kmeans(data, k, nstart=50,iter.max = 500 )$tot.withinss})
+# ugly plot
+plot(1:k.max, wss,
+     type="b", pch = 19, frame = FALSE, 
+     xlab="Number of clusters K",
+     ylab="Total within-clusters sum of squares")
+
+#cl <- kmeans(data, 2, nstart=50,iter.max = 15)
+#dt[ ,cluster := kmeans(data, 2, nstart=50,iter.max = 15)$cluster]
+
+#install.packages("ggplot2")
+library(ggplot2)
+library(scales)
+tss <- wss[1]
+dt_plot <- data.table(k = 1:k.max, wss = wss)
+dt_plot[ ,eta_sqr := 1-wss/tss]
+dt_plot[ ,wss_lag1 := shift(wss, 1, type = "lag")]
+dt_plot[ ,pre := (wss_lag1 - wss) / wss_lag1]
+
+plot_wss <- ggplot(data=dt_plot, aes(x=k, y=wss, group=1)) +
+  geom_line()+ scale_x_continuous(breaks=1:k.max)+  theme(axis.title=element_text(size=12))+
+  geom_point() + xlab("Number of clusters") +ylab("WSS")
+
+plot_ln_wss <- ggplot(data=dt_plot, aes(x=k, y=log(wss), group=1)) +
+  geom_line()+scale_x_continuous(breaks=1:k.max)+theme(axis.title=element_text(size=12))+
+  geom_point() + xlab("Number of clusters") +ylab("ln(WSS)")
+
+plot_eta <- ggplot(data=dt_plot, aes(x=k, y=eta_sqr, group=1)) +
+  geom_line()+scale_x_continuous(breaks=1:k.max)+theme(axis.title=element_text(size=12))+
+  geom_point() + xlab("Number of clusters") +ylab("Eta k squared") +
+  ylim(c(0,1))
+
+plot_pre <- ggplot(data=dt_plot, aes(x=k, y=pre, group=1)) +
+  geom_line()+scale_x_continuous(breaks=1:k.max)+theme(axis.title=element_text(size=12))+
+  geom_point() + xlab("Number of clusters") +ylab("PRE")
+
+#install.packages("gridExtra")
+library(gridExtra)
+plot_grid <- grid.arrange(plot_wss, plot_ln_wss, plot_eta, plot_pre, nrow = 2)
+
+plot_fpath <- "output/plot_grid.png"
+ggsave(plot_grid, filename = plot_fpath, width = 18, height = 8, units = "cm")
+
